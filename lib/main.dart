@@ -12,24 +12,24 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'MapmyIndia + OSRM Directions',
+      title: 'MapmyIndia Routing with eLocs',
       theme: ThemeData(
         primarySwatch: Colors.green,
       ),
-      home: const DirectionsScreen(),
+      home: const RoutingScreen(),
     );
   }
 }
 
-class DirectionsScreen extends StatefulWidget {
-  const DirectionsScreen({super.key});
-
+class RoutingScreen extends StatefulWidget {
+  const RoutingScreen({super.key});
   @override
-  State<DirectionsScreen> createState() => _DirectionsScreenState();
+  State<RoutingScreen> createState() => _RoutingScreenState();
 }
 
-class _DirectionsScreenState extends State<DirectionsScreen> {
-  final String bearerToken = '881b6206-b44c-49ef-aa5b-fdd3d71ff36b';
+class _RoutingScreenState extends State<RoutingScreen> {
+  final String apiKey = '7dd87200f91b7bbe0f3ffba12d4262d3'; // Your static API key
+  final String bearerToken = '0406ebc3-893c-4d1b-9705-1462d0452372'; // Your OAuth Bearer token
 
   final TextEditingController _startController = TextEditingController();
   final TextEditingController _endController = TextEditingController();
@@ -40,10 +40,8 @@ class _DirectionsScreenState extends State<DirectionsScreen> {
   bool _isLoadingStart = false;
   bool _isLoadingEnd = false;
 
-  double? selectedStartLat;
-  double? selectedStartLon;
-  double? selectedEndLat;
-  double? selectedEndLon;
+  String? selectedStartELoc;
+  String? selectedEndELoc;
 
   List<String> routeSteps = [];
 
@@ -86,11 +84,10 @@ class _DirectionsScreenState extends State<DirectionsScreen> {
           locations = data['places'];
         }
 
+        // Limit suggestions to first 3 only
         if (locations.length > 3) {
-  locations = locations.sublist(0, 3);
-}
-
-print('$locations' );
+          locations = locations.sublist(0, 3);
+        }
 
         setState(() {
           if (isStart) {
@@ -127,13 +124,65 @@ print('$locations' );
     }
   }
 
-  Future<void> _getRoute() async {
-    if (selectedStartLat == null ||
-        selectedStartLon == null ||
-        selectedEndLat == null ||
-        selectedEndLon == null) {
+  // Parse routing response steps into readable instructions
+  List<String> parseRouteSteps(Map<String, dynamic> data) {
+    List<String> instructions = [];
+    try {
+      final steps = data['routes'][0]['legs'][0]['steps'];
+
+      for (var step in steps) {
+        var maneuver = step['maneuver'];
+        String type = maneuver['type'] ?? '';
+        String modifier = maneuver['modifier'] ?? '';
+        String roadName = step['name'] ?? '';
+
+        double distance = (step['distance'] ?? 0).toDouble();
+        double duration = (step['duration'] ?? 0).toDouble();
+
+        String distanceStr = distance > 1000
+            ? '${(distance / 1000).toStringAsFixed(1)} km'
+            : '${distance.toStringAsFixed(0)} m';
+
+        String durationStr = duration >= 60
+            ? '${(duration / 60).toStringAsFixed(0)} min'
+            : '${duration.toStringAsFixed(0)} sec';
+
+        String instruction;
+        switch (type) {
+          case 'depart':
+            instruction = 'Start on $roadName';
+            break;
+          case 'turn':
+            String modText = modifier.replaceAll('_', ' ').toLowerCase();
+            instruction =
+                'Turn $modText${roadName.isNotEmpty ? ' onto $roadName' : ''}';
+            break;
+          case 'arrive':
+            instruction = 'You have arrived at your destination';
+            break;
+          case 'roundabout':
+            String exitNum = maneuver['exit']?.toString() ?? '';
+            instruction =
+                'At roundabout, take exit $exitNum${roadName.isNotEmpty ? ' onto $roadName' : ''}';
+            break;
+          default:
+            instruction = '$type on $roadName';
+            break;
+        }
+
+        instructions.add('$instruction ($distanceStr, $durationStr)');
+      }
+    } catch (e) {
+      instructions.add('Failed to parse route steps: $e');
+    }
+
+    return instructions;
+  }
+
+  Future<void> _getRouteWithELoc() async {
+    if (selectedStartELoc == null || selectedEndELoc == null) {
       setState(() {
-        routeSteps = ['Please select both start and end locations'];
+        routeSteps = ['Please select start and end locations from suggestions (must have eLocs).'];
       });
       return;
     }
@@ -142,74 +191,24 @@ print('$locations' );
       routeSteps.clear();
     });
 
-    final String coords =
-        '${selectedStartLon},${selectedStartLat};${selectedEndLon},${selectedEndLat}';
+    final String urlStr =
+        'https://apis.mapmyindia.com/advancedmaps/v1/$apiKey/route_adv/biking/$selectedStartELoc;$selectedEndELoc?steps=true';
 
-    final Uri url = Uri.parse(
-        'http://router.project-osrm.org/route/v1/bicycle/$coords?steps=true&geometries=geojson');
+    final Uri url = Uri.parse(urlStr);
 
     try {
       final response = await http.get(url);
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final List<dynamic> steps = data['routes'][0]['legs'][0]['steps'];
+        final data = json.decode(response.body);
 
-        List<String> instructions = [];
-
-        for (var step in steps) {
-          var maneuver = step['maneuver'];
-          String type = maneuver['type'] ?? '';
-          String modifier = maneuver['modifier'] ?? '';
-          String roadName = step['name'] ?? '';
-
-          double distance = (step['distance'] ?? 0).toDouble();
-          double duration = (step['duration'] ?? 0).toDouble();
-
-          String distanceStr = distance > 1000
-              ? '${(distance / 1000).toStringAsFixed(1)} km'
-              : '${distance.toStringAsFixed(0)} m';
-
-          String durationStr = duration >= 60
-              ? '${(duration / 60).toStringAsFixed(0)} min'
-              : '${duration.toStringAsFixed(0)} s';
-
-          String instruction;
-
-          switch (type) {
-            case 'depart':
-              instruction = 'START on $roadName';
-              break;
-            case 'turn':
-              String modText = modifier.replaceAll('_', ' ').toUpperCase();
-              instruction = 'TURN $modText onto $roadName';
-              break;
-            case 'roundabout':
-              String exitNum = maneuver['exit'] != null ? maneuver['exit'].toString() : '';
-              instruction = 'ROUNDABOUT, take exit $exitNum onto $roadName';
-              break;
-            case 'arrive':
-              instruction = 'ARRIVE at your destination';
-              break;
-            default:
-              instruction = '${type.toUpperCase()} on $roadName';
-          }
-
-          if (roadName.isEmpty) {
-            instruction = instruction.replaceAll(' onto ', ' ');
-          }
-
-          instruction = '$instruction ($distanceStr, $durationStr)';
-
-          instructions.add(instruction);
-        }
-
+        List<String> instructions = parseRouteSteps(data);
         setState(() {
           routeSteps = instructions;
         });
       } else {
         setState(() {
-          routeSteps = ['Failed to fetch route. Status code: ${response.statusCode}'];
+          routeSteps = ['Routing API failed: ${response.statusCode}'];
         });
       }
     } catch (e) {
@@ -228,49 +227,25 @@ print('$locations' );
         final suggestion = suggestions[index];
         final placeName = suggestion['placeName'] ?? '';
         final placeAddress = suggestion['placeAddress'] ?? '';
+        final eLoc = suggestion['eLoc'] ?? '';
 
         return ListTile(
           title: Text(placeName),
           subtitle: Text(placeAddress),
-          // ...existing code...
-onTap: () {
-  final latRaw = suggestion['latitude'];
-  final lonRaw = suggestion['longitude'];
-
-  // Safely parse latitude and longitude
-  final double? lat = latRaw is double
-      ? latRaw
-      : latRaw is String
-          ? double.tryParse(latRaw)
-          : null;
-  final double? lon = lonRaw is double
-      ? lonRaw
-      : lonRaw is String
-          ? double.tryParse(lonRaw)
-          : null;
-
-  if (lat == null || lon == null) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Invalid location data from API.')),
-    );
-    return;
-  }
-
-  setState(() {
-    if (isStart) {
-      selectedStartLat = lat;
-      selectedStartLon = lon;
-      _startSuggestions = [];
-      _startController.text = placeName;
-    } else {
-      selectedEndLat = lat;
-      selectedEndLon = lon;
-      _endSuggestions = [];
-      _endController.text = placeName;
-    }
-  });
-},
-// ...existing code...
+          trailing: Text(eLoc),
+          onTap: () {
+            setState(() {
+              if (isStart) {
+                selectedStartELoc = eLoc;
+                _startSuggestions = [];
+                _startController.text = placeName;
+              } else {
+                selectedEndELoc = eLoc;
+                _endSuggestions = [];
+                _endController.text = placeName;
+              }
+            });
+          },
         );
       },
     );
@@ -286,61 +261,67 @@ onTap: () {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-        appBar: AppBar(
-          title: const Text('MapmyIndia + OSRM Directions'),
-        ),
-        body: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(children: [
-              TextField(
-                controller: _startController,
-                decoration: InputDecoration(
-                  labelText: 'Start Location',
-                  prefixIcon: const Icon(Icons.my_location),
-                  suffixIcon:
-                      _isLoadingStart ? const CircularProgressIndicator(strokeWidth: 2) : null,
-                ),
-                onChanged: (input) => fetchAutosuggest(input, true),
+      appBar: AppBar(
+        title: const Text('MapmyIndia Routing with eLocs'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            TextField(
+              controller: _startController,
+              decoration: InputDecoration(
+                labelText: 'Start Location',
+                prefixIcon: const Icon(Icons.my_location),
+                suffixIcon:
+                    _isLoadingStart ? const CircularProgressIndicator(strokeWidth: 2) : null,
               ),
-              _startSuggestions.isEmpty
-                  ? const SizedBox.shrink()
-                  : Expanded(
-                      flex: 0,
-                      child: _buildSuggestionList(_startSuggestions, true, _startController)),
-              const SizedBox(height: 10),
-              TextField(
-                controller: _endController,
-                decoration: InputDecoration(
-                  labelText: 'End Location',
-                  prefixIcon: const Icon(Icons.location_on),
-                  suffixIcon: _isLoadingEnd ? const CircularProgressIndicator(strokeWidth: 2) : null,
-                ),
-                onChanged: (input) => fetchAutosuggest(input, false),
+              onChanged: (input) => fetchAutosuggest(input, true),
+            ),
+            _startSuggestions.isEmpty
+                ? const SizedBox.shrink()
+                : Expanded(
+                    flex: 0,
+                    child: _buildSuggestionList(_startSuggestions, true, _startController)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _endController,
+              decoration: InputDecoration(
+                labelText: 'End Location',
+                prefixIcon: const Icon(Icons.location_on),
+                suffixIcon:
+                    _isLoadingEnd ? const CircularProgressIndicator(strokeWidth: 2) : null,
               ),
-              _endSuggestions.isEmpty
-                  ? const SizedBox.shrink()
-                  : Expanded(
-                      flex: 0,
-                      child: _buildSuggestionList(_endSuggestions, false, _endController)),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                  onPressed: _getRoute,
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 14, horizontal: 40),
-                    child: Text('Get Directions', style: TextStyle(fontSize: 18)),
-                  )),
-              const SizedBox(height: 20),
-              routeSteps.isEmpty
-                  ? const Text('No route loaded')
-                  : Expanded(
-                      child: ListView.builder(
-                        itemCount: routeSteps.length,
-                        itemBuilder: (context, index) => ListTile(
-                          leading: const Icon(Icons.directions_bike),
-                          title: Text(routeSteps[index]),
-                        ),
+              onChanged: (input) => fetchAutosuggest(input, false),
+            ),
+            _endSuggestions.isEmpty
+                ? const SizedBox.shrink()
+                : Expanded(
+                    flex: 0,
+                    child: _buildSuggestionList(_endSuggestions, false, _endController)),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _getRouteWithELoc,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 14, horizontal: 40),
+                child: Text('Get Directions', style: TextStyle(fontSize: 18)),
+              ),
+            ),
+            const SizedBox(height: 20),
+            routeSteps.isEmpty
+                ? const Text('No route loaded')
+                : Expanded(
+                    child: ListView.builder(
+                      itemCount: routeSteps.length,
+                      itemBuilder: (context, index) => ListTile(
+                        leading: const Icon(Icons.directions_bike),
+                        title: Text(routeSteps[index]),
                       ),
-                    )
-            ])));
+                    ),
+                  )
+          ],
+        ),
+      ),
+    );
   }
 }
