@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 
 void main() {
   runApp(const MyApp());
@@ -107,7 +108,9 @@ class _RoutingScreenState extends State<RoutingScreen> {
             _isLoadingEnd = false;
           }
         });
-        print('Error: ${response.statusCode} ${response.reasonPhrase}');
+        if (kDebugMode) {
+          debugPrint('Error: ${response.statusCode} ${response.reasonPhrase}');
+        }
       }
     } catch (e) {
       setState(() {
@@ -119,7 +122,9 @@ class _RoutingScreenState extends State<RoutingScreen> {
           _isLoadingEnd = false;
         }
       });
-      print('Exception: $e');
+      if (kDebugMode) {
+        debugPrint('Exception: $e');
+      }
     }
   }
 
